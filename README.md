@@ -1,8 +1,14 @@
-# Exercícios 7 e 8 — Express + TypeScript
+# Exercícios 9 e 10 — Express + TypeScript
 
-Continuação da API CRUD do exercício 5. O branch `main` guarda a versão antiga,
-com as rotas mexendo direto no array, e o branch `exercicios-7-e-8` traz as duas
-mudanças pedidas: um middleware de log tipado e a classe `UserService`.
+Continuação da API dos exercícios anteriores. Agora ela tem um tipo de erro
+próprio (`AppError`), um middleware global que transforma erro em resposta, e um
+CRUD de produtos com as regras de nome e preço.
+
+Branches:
+
+- `main` — API do exercício 5
+- `exercicios-7-e-8` — middleware de log e `UserService`
+- `exercicios-9-e-10` — entrega desta atividade
 
 ## Como executar
 
@@ -18,75 +24,119 @@ Servidor em `http://localhost:3000`.
 
 ```
 src/
+├── errors/
+│   └── app-error.ts
 ├── middlewares/
+│   ├── error-handler.middleware.ts
 │   └── logger.middleware.ts
 ├── models/
+│   ├── product.ts
 │   └── user.ts
 ├── services/
+│   ├── product.service.ts
 │   └── user.service.ts
 └── server.ts
 ```
 
-## Rotas
+## Rotas de produtos
 
-| Método | Rota       | Respostas                                        |
-| ------ | ---------- | ------------------------------------------------ |
-| GET    | /users     | 200 com a lista                                  |
-| GET    | /users/:id | 200 com o usuário, 404 se não existir            |
-| POST   | /users     | 201 com o criado, 400 se o corpo for inválido    |
-| PUT    | /users/:id | 200 com o atualizado, 400 corpo inválido, 404    |
-| DELETE | /users/:id | 200 com o usuário removido, 404 se não existir   |
+| Método | Rota          | Respostas                                      |
+| ------ | ------------- | ---------------------------------------------- |
+| GET    | /products     | 200 com a lista                                |
+| GET    | /products/:id | 200 com o produto, 400 id inválido, 404        |
+| POST   | /products     | 201 com o criado, 400 se quebrar alguma regra  |
+| PUT    | /products/:id | 200 com o atualizado, 400, 404                 |
+| DELETE | /products/:id | 204 sem corpo, 400, 404                        |
 
-Os status e os formatos são os mesmos do exercício 5 — a refatoração não mexeu
-no contrato da API.
+As rotas de usuários continuam iguais às dos exercícios anteriores.
 
-## Middleware
+`IProduct` é a mesma interface do exercício 3: `id`, `name`, `price`, `inStock` e
+`categories: string[]`.
 
-`loggerMiddleware` imprime `[timestamp] MÉTODO /url` no terminal e chama
-`next()`. Está registrado com `app.use()` antes de tudo, então também registra
-rota inexistente e requisição com JSON quebrado, que morrem antes de chegar nas
-rotas. O parâmetro `res` entra na assinatura porque o Express sempre passa os
-três argumentos nessa ordem: para chegar em `next` eu preciso declarar `res`,
-mesmo sem usar (por isso ele está como `_res`).
+## Regras de produto
 
-## Decisões de tipo no UserService
+- `name` precisa ser texto e ter pelo menos 3 caracteres depois do `trim`, então
+  um nome com três espaços é recusado.
+- `price` precisa ser número finito. `typeof NaN` também é `number`, por isso a
+  checagem usa `Number.isFinite` em vez de comparar só o tipo.
+- Preço zero passa: o enunciado proíbe apenas negativo, e produto de brinde com
+  preço zero é uma situação real.
+- `inStock` booleano e `categories` uma lista de textos.
+- O id nunca vem do cliente, é o serviço que gera o próximo.
 
-- `getById`, `update` e `delete` devolvem `IUser | undefined`. O `undefined` é o
-  jeito natural de dizer "não achei" — quem traduz isso em 404 é a rota, que é
-  quem conhece HTTP.
-- `delete` devolve o usuário removido em vez de `true/false`, porque o exercício
-  5 respondia com o objeto apagado e eu não quis mudar a resposta.
-- `create` recebe `Omit<IUser, 'id'>` e não `IUser` como está no enunciado. Quem
-  gera o id sequencial é o serviço, então pedir um id que seria ignorado só
-  atrapalha quem chama.
-- `update` recebe `Partial<IUser>` e faz `{ ...atual, ...alterações, id }`, o que
-  permite mandar só o campo que mudou. O `id` é reescrito no final para o id da
-  URL não ser trocado pelo corpo.
-- `getAll` devolve uma cópia (`[...this.users]`) para ninguém alterar a lista
-  interna por fora do serviço.
+A validação está em um método privado do `ProductService`, usado pelo POST e pelo
+PUT. No PUT eu junto o corpo recebido com o produto atual e valido o resultado
+inteiro: assim dá para mandar só o campo que mudou e, mesmo assim, o produto
+guardado sempre respeita todas as regras.
 
-A validação do corpo continua na rota, com `typeof` em cada campo: TypeScript só
-confere tipo em tempo de compilação e o JSON do cliente chega em tempo de
-execução, então `req.body as IUser` não garantiria nada.
+## Escolhas de status
+
+- 400 para dado inválido e para regra de negócio quebrada. Cogitei 422, mas 400
+  já é "requisição que não dá para processar do jeito que veio", é o que a maioria
+  dos clientes HTTP entende sem consultar documentação, e o resto da API já usava
+  400. O importante era não usar dois status diferentes para o mesmo tipo de falha.
+- 404 quando o id não existe.
+- 500 apenas para erro que a aplicação não previu.
+- DELETE de produto responde 204 sem corpo. Em usuários ele continua devolvendo
+  200 com o usuário removido, porque essa resposta veio do exercício 5 e eu não
+  quis mudar um contrato que já estava entregue.
+- Id não numérico na URL agora responde 400 em vez de 404. É a única resposta que
+  mudou em relação aos exercícios anteriores: antes `/users/abc` virava `NaN`,
+  não achava ninguém e caía no 404, o que escondia um erro de quem chamou.
+
+## AppError e o middleware
+
+`AppError` estende `Error`, chama `super(message)` para a mensagem e a pilha
+serem montadas pelo próprio `Error`, define `name` como `'AppError'` e guarda o
+`statusCode` como `public readonly` — o status é decidido no momento em que o erro
+nasce e não faz sentido alguém alterar depois.
+
+`errorHandler` é um `ErrorRequestHandler` com os quatro parâmetros, registrado
+depois de todas as rotas (antes delas ele nunca receberia os erros). Se o erro é
+um `AppError`, ele usa o status e a mensagem que vieram junto; qualquer outra
+coisa vira 500 com mensagem genérica, e o erro completo sai por `console.error` só
+no terminal do servidor.
+
+O `next` do middleware é usado quando a resposta já começou a ser enviada
+(`res.headersSent`): nesse caso não dá para trocar o status, então o erro é
+repassado para o handler padrão do Express fechar a conexão.
+
+Nas rotas, os erros são pegos com `catch (error: unknown)` e mandados para o
+middleware com `next(error)`. `unknown` obriga a descobrir o que foi capturado
+antes de acessar qualquer propriedade — em JavaScript dá para lançar qualquer
+coisa, inclusive uma string, então `error.message` com `any` quebraria em runtime.
+O `instanceof AppError` do middleware é exatamente essa checagem.
+
+`ProductService` lança `AppError` porque as regras de negócio moram nele.
+`UserService` continua devolvendo `undefined` quando não encontra, como ficou
+decidido no exercício 8, e quem transforma isso em `AppError` é a rota.
 
 ## Testes
 
-Estão em [docs/testes.md](docs/testes.md), com o corpo e o status de cada chamada
-e o log que apareceu no terminal.
+Em [docs/testes-9-e-10.md](docs/testes-9-e-10.md), com status e corpo de cada
+cenário, incluindo os dois erros forçados. Os testes dos exercícios anteriores
+estão em [docs/testes.md](docs/testes.md).
 
 ## Respondendo as perguntas da entrega
 
-**Qual problema o middleware resolve?** Ele tira do caminho a repetição. Sem
-middleware, para saber o que a API está recebendo eu teria que colocar um
-`console.log` dentro de cada rota, e ainda assim não veria as chamadas que nem
-chegam a bater numa rota. Com um `app.use()` no começo do arquivo, uma função só
-enxerga toda requisição que entra, e o dia que eu quiser mudar o formato do log
-ou medir o tempo de resposta é um arquivo só para alterar.
+**Por que centralizar erros melhora a API?** Porque o formato da resposta de erro
+passa a ser decidido em um lugar só. Antes cada rota montava seu próprio
+`res.status(...).json(...)`, e bastava eu esquecer um campo em uma delas para a
+API responder de um jeito em `/users` e de outro em `/products` — quem consome
+precisaria tratar cada caso. Com o middleware global, a rota só lança o erro e
+segue; o formato, o log e a decisão de esconder detalhe interno ficam num arquivo
+só. Também some a repetição: dez rotas deixaram de ter o mesmo bloco de resposta
+de erro copiado.
 
-**Por que o UserService melhora a organização?** Porque separa duas coisas que
-estavam misturadas no `server.ts`: a regra de mexer nos usuários e o protocolo
-HTTP. Hoje a rota só converte o `id`, valida o corpo e escolhe o status; quem
-sabe onde os usuários moram e como procurar, criar, alterar e remover é o
-serviço. Isso deixa o arquivo de rotas curto e o serviço testável sem subir o
-Express — ele não importa `Request` nem `Response`. E quando esses dados saírem
-da memória para um banco, muda o `UserService` e nenhuma rota precisa ser tocada.
+**Diferença entre validação de tipo e regra de negócio.** Validação de tipo
+pergunta "esse dado é do formato que eu espero?" — `price` é um número, `name` é
+uma string. É o que o TypeScript garante entre o meu próprio código, mas não no
+que chega pela rede, porque o JSON do cliente só existe em tempo de execução;
+por isso a checagem com `typeof` continua necessária mesmo com tudo tipado.
+Regra de negócio pergunta outra coisa: "esse dado, mesmo bem formado, faz sentido
+para esse sistema?" — `-1` é um número perfeitamente válido, mas não é um preço
+possível, e `"ab"` é uma string legítima que não serve como nome de produto. A
+primeira protege o código de quebrar; a segunda protege o negócio de aceitar algo
+incoerente. Na prática as duas moram juntas na validação do serviço, mas quando
+mudam mudam por motivos diferentes: o tipo muda quando a interface muda, a regra
+muda quando alguém do negócio decide que agora pode.
